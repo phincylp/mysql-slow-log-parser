@@ -1,0 +1,7 @@
+Package: _PACKAGE_
+Version: 1._VERSION_
+Section: ops 
+Priority: standard
+Architecture: all
+Maintainer: Tech Ops <ops-ninjas@domain.com>
+Description: MySQL Slow Query Parser

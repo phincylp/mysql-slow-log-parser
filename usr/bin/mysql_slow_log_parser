@@ -1,0 +1,162 @@
+#!/usr/bin/perl -w
+use strict;
+use Getopt::Long;
+use Time::Local 'timelocal_nocheck';
+
+#
+# Nathanial Hendler
+# http://retards.org/
+#
+# 2001-06-26 v1.0
+#
+# This perl script parses a MySQL slow_queries log file
+# ignoring all queries less than $min_time and prints
+# out how many times a query was greater than $min_time
+# with the seconds it took each time to run.  The queries
+# are sorted by number of times it took; the most often
+# query appearing at the bottom of the output.
+#
+# Usage: mysql_slow_log_parser logfile
+#
+# ------------------------
+# SOMETHING TO THINK ABOUT (aka: how to read output)
+# ------------------------
+#
+# Also, it does to regex substitutions to normalize
+# the queries...
+#
+#   $query_string =~ s/\d+/XXX/g;
+#   $query_string =~ s/([\'\"]).+?([\'\"])/$1XXX$2/g;
+#
+# These replace numbers with XXX and strings found in
+# quotes with XXX so that the same select statement
+# with different WHERE clauses will be considered
+# as the same query.
+#
+# so these...
+#
+#   SELECT * FROM offices WHERE office_id = 3;
+#   SELECT * FROM offices WHERE office_id = 19;
+#
+# become...
+#
+#   SELECT * FROM offices WHERE office_id = XXX;
+#
+#
+# And these...
+#
+#   SELECT * FROM photos WHERE camera_model LIKE 'Nikon%';
+#   SELECT * FROM photos WHERE camera_model LIKE '%Olympus';
+#
+# become...
+#
+#   SELECT * FROM photos WHERE camera_model LIKE 'XXX';
+#
+#
+# ---------------------
+# THIS MAY BE IMPORTANT (aka: Probably Not)
+# --------------------- 
+#
+# *SO* if you use numbers in your table names, or column
+# names, you might get some oddities, but I doubt it.
+# I mean, how different should the following queries be
+# considered?
+#
+#   SELECT car1 FROM autos_10;
+#   SELECT car54 FROM autos_11;
+#
+# I don't think so.
+#
+
+
+die "Usage $0 <mysql slow query log>\n" unless @ARGV;
+
+my $stime;
+
+GetOptions (
+	"s=s" => \$stime,
+);
+
+my %time_map = (
+	m => 1,
+	h => 60,
+	d => 60*24,
+);
+if (defined $stime and $stime =~ /^-(\d+)([mhd]?)$/) {
+	if ($2) {
+		$stime = $1*$time_map{$2};
+	} else {
+		$stime = $1;
+	}
+	$stime = time - int($stime*60);
+} elsif(defined $stime) {
+	die "Unknown start time format\n";
+} else {
+	$stime = 0;
+}
+#$min_time       = 0;	# Skip queries less than $min_time
+my $max_display = 5;	# Truncate display if more than $max_display occurances of a query
+
+my %queries;
+my $query_string = '';
+my $time = 0;
+my $line;
+my $skip = 1;
+##############################################
+# Loop Through The Logfile
+##############################################
+while (<>) {
+	# Skip Bogus Lines
+	next if ( m|/.*mysqld, Version:.+, started with:| );
+	next if ( m|Tcp port: \d+  Unix socket: .*mysql.sock| );
+	next if ( m|Time\s+Id\s+Command\s+Argument| );
+	if ($skip and /Time:\s+(\d\d)(\d\d)(\d\d)\s+(\d{1,2}):(\d{1,2}):(\d{1,2})/) {
+		my $logtime = timelocal_nocheck($6,$5,$4,$3,$2-1,100+$1);
+		if ($logtime >= $stime) {
+			$skip = 0;
+		}
+	}
+	next if $skip;
+	unless (/^\#/) {
+		$query_string = $_;
+		while(<>) {
+			last if /^\#/;
+			$query_string.=$_;
+		}
+		$query_string =~ s/\d+/XXX/g;
+		$query_string =~ s/([\'\"]).+?([\'\"])/$1XXX$2/g;
+		push @{$queries{$query_string}},$time if ($time > 0);
+		#print "$query_string";
+		$time = 0;
+	}
+	last unless defined $_;
+	if (/[Tt]ime:\s+([\d\.]+)\s+Lock_time:\s+([\d\.]+)/) {
+		$time = $1;
+		#print "$time\n";
+	}
+}
+
+##############################################
+# Display Output
+##############################################
+foreach my $query (sort { @{$queries{$b}} <=> @{$queries{$a}} } keys %queries) {
+	my @seconds = sort { $a <=> $b } @{$queries{$query}};
+	print "### " . @{$queries{$query}} . " Quer" . ((@{$queries{$query}} > 1)?"ies ":"y ") . "\n";
+	print "### Taking ";
+	print @seconds > $max_display ? "$seconds[0] to $seconds[-1]" : sec_joiner(\@seconds);
+	print " seconds to complete\n\n";
+	while ($query =~ /['"]?XXX['"]?\s*((,\s*['"]?XXX['"]?)+)/) {
+		my $c = scalar(split /\s*,\s*/,$1);
+		$query =~ s/['"]?XXX['"]?\s*((,\s*['"]?XXX['"]?)+)/'XXX',..$c times../;
+	}
+	print "$query\n\n";
+}
+
+sub sec_joiner {
+	my ($seconds) = @_;
+	my $string = join(", ", @{$seconds});
+	$string =~ s/, (\d+)$/ and $1/;
+	return $string;
+}
+
+exit(0);
